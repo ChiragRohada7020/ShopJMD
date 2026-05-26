@@ -14,4 +14,4 @@ if spec is None or spec.loader is None:
 backend_app = module_from_spec(spec)
 spec.loader.exec_module(backend_app)
 
-app = backend_app.create_app()
+app = backend_app.app
