@@ -24,6 +24,10 @@ def create_app():
     app.register_blueprint(voice_bp, url_prefix="/api")
     app.register_blueprint(pdf_bp, url_prefix="/api/suppliers")
 
+    @app.get("/")
+    def root():
+        return jsonify({"status": "ok", "message": "Shop ledger API is running"})
+
     @app.get("/api/health")
     def health():
         return jsonify({"status": "ok", "message": "Shop ledger API is running"})
