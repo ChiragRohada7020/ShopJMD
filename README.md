@@ -71,11 +71,13 @@ The Flask API runs on `http://localhost:5000`.
 Create or edit `backend/.env`:
 
 ```env
-MONGO_URI=mongodb://localhost:27017/shopdb
-MONGO_DB_NAME=shopdb
+MONGO_URI=mongodb://localhost:27017/shopjmd
+MONGO_DB_NAME=shopjmd
+MONGO_SUPPLIERS_COLLECTION=shopjmd_suppliers
+MONGO_TRANSACTIONS_COLLECTION=shopjmd_transactions
 GROQ_API_KEY=your_key
 GROQ_MODEL=llama3-70b-8192
-SHOP_NAME=My Shop
+SHOP_NAME=Shop JMD
 FRONTEND_ORIGIN=http://localhost:5173
 PORT=5000
 FLASK_DEBUG=true
@@ -106,10 +108,10 @@ VITE_API_URL=http://localhost:5000
 Install and start MongoDB locally, then use:
 
 ```env
-MONGO_URI=mongodb://localhost:27017/shopdb
+MONGO_URI=mongodb://localhost:27017/shopjmd
 ```
 
-For MongoDB Atlas, replace `MONGO_URI` with your Atlas connection string and keep `MONGO_DB_NAME=shopdb`.
+For MongoDB Atlas, replace `MONGO_URI` with your Atlas connection string and keep `MONGO_DB_NAME=shopjmd`. The default collections are `shopjmd_suppliers` and `shopjmd_transactions`.
 
 ## Groq API Setup
 

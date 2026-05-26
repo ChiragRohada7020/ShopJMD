@@ -1,9 +1,11 @@
 from bson import ObjectId
 
 from models.transaction import serialize_transaction
+from services.db import transactions_collection
 
 
 def supplier_totals(db, supplier_id):
+    transactions = transactions_collection(db)
     pipeline = [
         {"$match": {"supplier_id": ObjectId(str(supplier_id))}},
         {
@@ -14,7 +16,7 @@ def supplier_totals(db, supplier_id):
         },
     ]
     totals = {"credit": 0, "debit": 0}
-    for row in db.transactions.aggregate(pipeline):
+    for row in transactions.aggregate(pipeline):
         totals[row["_id"]] = float(row.get("total", 0))
     return totals
 
@@ -25,9 +27,10 @@ def supplier_balance(db, supplier):
 
 
 def transactions_with_running_balance(db, supplier):
+    transactions = transactions_collection(db)
     balance = float(supplier.get("opening_balance", 0))
     rows = []
-    cursor = db.transactions.find({"supplier_id": supplier["_id"]}).sort([("date", 1), ("created_at", 1)])
+    cursor = transactions.find({"supplier_id": supplier["_id"]}).sort([("date", 1), ("created_at", 1)])
     for transaction in cursor:
         amount = float(transaction.get("amount", 0))
         if transaction.get("transaction_type") == "credit":

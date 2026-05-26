@@ -8,15 +8,28 @@ def init_mongo(app):
     app.extensions["mongo_client"] = client
     app.extensions["mongo_db"] = db
 
-    db.suppliers.create_index("supplier_name")
-    db.suppliers.create_index("mobile_number")
-    db.transactions.create_index([("supplier_id", 1), ("date", 1), ("created_at", 1)])
+    suppliers = db[app.config["MONGO_SUPPLIERS_COLLECTION"]]
+    transactions = db[app.config["MONGO_TRANSACTIONS_COLLECTION"]]
+
+    suppliers.create_index("supplier_name")
+    suppliers.create_index("mobile_number")
+    transactions.create_index([("supplier_id", 1), ("date", 1), ("created_at", 1)])
 
 
 def get_db():
     if "mongo_db" not in g:
         g.mongo_db = current_app.extensions["mongo_db"]
     return g.mongo_db
+
+
+def suppliers_collection(db=None):
+    db = db or get_db()
+    return db[current_app.config["MONGO_SUPPLIERS_COLLECTION"]]
+
+
+def transactions_collection(db=None):
+    db = db or get_db()
+    return db[current_app.config["MONGO_TRANSACTIONS_COLLECTION"]]
 
 
 def close_mongo(_error=None):
