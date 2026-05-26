@@ -19,7 +19,8 @@ Understand Hindi/Marathi money words: sau/sao/so means hundred, hazar/hajaar mea
 Use corrected_voice_text to fix common voice spelling mistakes, but keep the user's original meaning.
 If text starts with a supplier code/name followed by a product word, such as "bh shakkar ki doguni 1322 mili", supplier_name is "bh" and product is not supplier.
 If a goods phrase has no clear cash received/paid word, default transaction_type to "debit".
-If amount is missing and quantity/rate exist, amount = quantity * rate.
+If phrase says per kg/kg bhav, amount = quantity * kg-per-unit * rate. If it says only "45 ka bhav" without per kg, amount = quantity * rate.
+If amount is missing and quantity/rate exist, amount = quantity * rate unless per kg rule applies.
 If date is missing use the provided current date.
 Do not invent a supplier name if none is spoken.
 If a spoken supplier name sounds close to one of the known suppliers, choose the closest known supplier name.
@@ -138,6 +139,30 @@ LEDGER_EXAMPLES = [
             "rate": 1322,
             "amount": 2644,
             "description": "shakkar, 2 goni, at 1322",
+        },
+    },
+    {
+        "voice_text": "shakkar ki do goni 50 kilo ki 45 per kg ka bhav",
+        "parsed": {
+            "supplier_name": "",
+            "transaction_type": "debit",
+            "quantity": 2,
+            "unit": "goni (50 kg)",
+            "rate": 45,
+            "amount": 4500,
+            "description": "sugar, 2 goni (50 kg), at 45 per kg",
+        },
+    },
+    {
+        "voice_text": "shakkar ki do goni 50 kilo ki 45 ka bhav",
+        "parsed": {
+            "supplier_name": "",
+            "transaction_type": "debit",
+            "quantity": 2,
+            "unit": "goni (50 kg)",
+            "rate": 45,
+            "amount": 90,
+            "description": "sugar, 2 goni (50 kg), at 45",
         },
     },
 ]
@@ -304,6 +329,9 @@ WORD_CORRECTIONS = {
     "rupya": "rupaye",
     "rupee": "rupaye",
     "rupees": "rupaye",
+    "perkg": "per kg",
+    "parkilo": "per kilo",
+    "prkg": "per kg",
 }
 
 CREDIT_PATTERNS = [
@@ -387,11 +415,12 @@ def fallback_parse(text, today, supplier_names=None):
     unit_words = "|".join(UNIT_ALIASES)
     quantity_match = re.search(rf"\b(\d+(?:\.\d+)?)\s+({unit_words})\b", lower)
     rate_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:rupaye|rupees|rs|rate)\b", lower)
+    bhav_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:per\s*(?:kg|kilo)|(?:kg|kilo)\s*(?:ka\s*)?bhav|ka\s+bhav)\b", lower)
     weight_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:kg|kilo)\b", lower)
 
     quantity = safe_float(quantity_match.group(1)) if quantity_match else 0
-    rate = safe_float(rate_match.group(1)) if rate_match else (numbers[-1] if len(numbers) > 1 else 0)
-    amount = quantity * rate if quantity and rate else (0 if quantity_match else (numbers[0] if numbers else 0))
+    rate = safe_float(rate_match.group(1)) if rate_match else (safe_float(bhav_match.group(1)) if bhav_match else (numbers[-1] if len(numbers) > 1 else 0))
+    amount = calculate_amount(quantity, rate, corrected_text)
     unit_match = quantity_match or re.search(rf"\b({unit_words})\b", lower)
     unit_word = unit_match.group(2) if quantity_match else (unit_match.group(1) if unit_match else "")
     unit = UNIT_ALIASES.get(unit_word, "")
@@ -432,10 +461,14 @@ def fallback_parse(text, today, supplier_names=None):
 
 
 def normalize_ai_payload(payload, original_text, today, corrected_text=None):
+    corrected_text = corrected_text or normalize_voice_text(original_text)
     quantity = safe_float(payload.get("quantity"))
     rate = safe_float(payload.get("rate"))
     amount = safe_float(payload.get("amount"))
-    if amount <= 0 and quantity > 0 and rate > 0:
+    calculated_amount = calculate_amount(quantity, rate, corrected_text)
+    if calculated_amount > 0:
+        amount = calculated_amount
+    elif amount <= 0 and quantity > 0 and rate > 0:
         amount = quantity * rate
 
     transaction_type = str(payload.get("transaction_type", "")).lower()
@@ -444,7 +477,7 @@ def normalize_ai_payload(payload, original_text, today, corrected_text=None):
     transaction_type = detect_transaction_type(original_text) or transaction_type
 
     supplier_name = str(payload.get("supplier_name", "")).strip()
-    supplier_name = correct_supplier_name(supplier_name, corrected_text or normalize_voice_text(original_text))
+    supplier_name = correct_supplier_name(supplier_name, corrected_text)
     description = build_clean_description(payload, original_text, corrected_text)
 
     return {
@@ -501,11 +534,31 @@ def build_clean_description(payload, original_text, corrected_text=None):
     elif unit:
         parts.append(unit)
     if rate > 0:
-        parts.append(f"at {rate:g}")
+        suffix = " per kg" if is_per_kg_rate(corrected) else ""
+        parts.append(f"at {rate:g}{suffix}")
 
     if parts:
         return ", ".join(parts)
     return str(payload.get("description") or corrected or original_text).strip()
+
+
+def calculate_amount(quantity, rate, text):
+    if quantity <= 0 or rate <= 0:
+        return 0
+    weight = extract_weight_per_unit(text)
+    if is_per_kg_rate(text) and weight > 0:
+        return quantity * weight * rate
+    return quantity * rate
+
+
+def extract_weight_per_unit(text):
+    match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:kg|kilo)\b", str(text or "").lower())
+    return safe_float(match.group(1)) if match else 0
+
+
+def is_per_kg_rate(text):
+    lower = str(text or "").lower()
+    return bool(re.search(r"\bper\s*(?:kg|kilo)\b|\b(?:kg|kilo)\s*(?:ka\s*)?bhav\b", lower))
 
 
 def safe_float(value):
