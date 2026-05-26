@@ -1,5 +1,6 @@
 import json
 import re
+from difflib import get_close_matches
 from datetime import date
 
 from flask import current_app
@@ -9,8 +10,10 @@ from groq import Groq
 SYSTEM_PROMPT = """
 You parse Hindi, Hinglish, and Indian shop ledger voice text into strict JSON for a supplier ledger app.
 Return only valid JSON with keys:
-supplier_name, transaction_type, quantity, unit, rate, amount, date, description.
+supplier_name, product_name, transaction_type, quantity, unit, weight_per_unit, weight_unit, total_weight, rate, rate_type, amount, payment_type, date, description, confidence, uncertain_fields.
 transaction_type must be "credit" or "debit".
+rate_type must be one of: "per_kg", "per_unit", "total", "unknown".
+payment_type must be one of: "cash", "ledger", "unknown".
 Use the Indian shop ledger meaning from ledger_examples exactly. These examples are more important than English accounting assumptions.
 For goods phrases, segregate spoken parts into fields. Example: "bh ka teen kaate 30 kilo ke 500 rupaye me" means supplier_name "bh", quantity 3, unit "katta (30 kg)", rate 500, amount 1500.
 Common retailer units include goni, daag, katta/kaata, carton/catoon, set, nag, bori, bag, packet, box, kg, kilo.
@@ -259,8 +262,15 @@ SPOKEN_NUMBERS = {
 
 UNIT_ALIASES = {
     "goni": "goni",
+    "gonia": "goni",
     "guni": "goni",
     "gunny": "goni",
+    "bora": "bora",
+    "bore": "bora",
+    "bori": "bori",
+    "bory": "bori",
+    "peti": "peti",
+    "pety": "peti",
     "daag": "daag",
     "dag": "daag",
     "katta": "katta",
@@ -276,8 +286,6 @@ UNIT_ALIASES = {
     "set": "set",
     "nag": "nag",
     "nug": "nag",
-    "bori": "bori",
-    "bory": "bori",
     "bag": "bag",
     "bags": "bag",
     "kg": "kg",
@@ -287,18 +295,43 @@ UNIT_ALIASES = {
     "pcs": "piece",
     "box": "box",
     "packet": "packet",
+    "pouch": "packet",
+    "thaila": "thaila",
+    "thela": "thaila",
+    "dabba": "dabba",
+    "daba": "dabba",
+    "liter": "litre",
+    "litre": "litre",
+    "ltr": "litre",
+    "gram": "gram",
+    "gm": "gram",
 }
 
-PRODUCT_WORDS = {
-    "sugar",
-    "shakkar",
-    "sakkar",
-    "sakhar",
-    "sygar",
-    "suger",
-    "chini",
-    "chinni",
+PRODUCT_ALIASES = {
+    "sugar": "Sugar",
+    "shakkar": "Sugar",
+    "sakkar": "Sugar",
+    "sakhar": "Sugar",
+    "sygar": "Sugar",
+    "suger": "Sugar",
+    "chini": "Sugar",
+    "chinni": "Sugar",
+    "chawal": "Rice",
+    "rice": "Rice",
+    "tandul": "Rice",
+    "gehu": "Wheat",
+    "gehun": "Wheat",
+    "gahu": "Wheat",
+    "wheat": "Wheat",
+    "aam": "Mango",
+    "amba": "Mango",
+    "mango": "Mango",
+    "dal": "Dal",
+    "daal": "Dal",
+    "oil": "Oil",
+    "tel": "Oil",
 }
+PRODUCT_WORDS = set(PRODUCT_ALIASES)
 
 WORD_CORRECTIONS = {
     "sygar": "sugar",
@@ -327,11 +360,37 @@ WORD_CORRECTIONS = {
     "hajaar": "hazar",
     "hazaar": "hazar",
     "rupya": "rupaye",
+    "rupay": "rupaye",
+    "rupey": "rupaye",
     "rupee": "rupaye",
     "rupees": "rupaye",
     "perkg": "per kg",
     "parkilo": "per kilo",
     "prkg": "per kg",
+    "wale": "wala",
+    "udaar": "udhar",
+    "udhaari": "udhar",
+    "cashh": "cash",
+}
+
+FUZZY_VOCABULARY = {
+    **{word: word for word in SPOKEN_NUMBERS},
+    **UNIT_ALIASES,
+    **{word: word for word in PRODUCT_WORDS},
+    **WORD_CORRECTIONS,
+    "bhav": "bhav",
+    "rate": "rate",
+    "rupaye": "rupaye",
+    "kilo": "kilo",
+    "kg": "kg",
+    "per": "per",
+    "udhar": "udhar",
+    "jama": "jama",
+    "cash": "cash",
+    "diya": "diya",
+    "diye": "diye",
+    "mila": "mila",
+    "mili": "mili",
 }
 
 CREDIT_PATTERNS = [
@@ -413,20 +472,21 @@ def fallback_parse(text, today, supplier_names=None):
     lower = normalize_amount_words(normalize_spoken_numbers(split_joined_quantity_units(corrected_text.lower())))
     numbers = [float(match) for match in re.findall(r"\d+(?:\.\d+)?", lower)]
     unit_words = "|".join(UNIT_ALIASES)
-    quantity_match = re.search(rf"\b(\d+(?:\.\d+)?)\s+({unit_words})\b", lower)
-    rate_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:rupaye|rupees|rs|rate)\b", lower)
-    bhav_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:per\s*(?:kg|kilo)|(?:kg|kilo)\s*(?:ka\s*)?bhav|ka\s+bhav)\b", lower)
+    quantity, unit_word = extract_quantity_and_unit(lower, unit_words)
+    rate_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:rupaye|rupees|rs|rate|bhav)\b", lower)
+    bhav_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:per\s*(?:kg|kilo)|(?:rupaye\s*)?(?:kg|kilo)|(?:kg|kilo)\s*(?:ka\s*)?bhav|ka\s+bhav)\b", lower)
     weight_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:kg|kilo)\b", lower)
 
-    quantity = safe_float(quantity_match.group(1)) if quantity_match else 0
     rate = safe_float(rate_match.group(1)) if rate_match else (safe_float(bhav_match.group(1)) if bhav_match else (numbers[-1] if len(numbers) > 1 else 0))
     amount = calculate_amount(quantity, rate, corrected_text)
-    unit_match = quantity_match or re.search(rf"\b({unit_words})\b", lower)
-    unit_word = unit_match.group(2) if quantity_match else (unit_match.group(1) if unit_match else "")
     unit = UNIT_ALIASES.get(unit_word, "")
     if unit and weight_match and unit != "kg":
         unit = f"{unit} ({safe_float(weight_match.group(1)):g} kg)"
     transaction_type = detect_transaction_type(text) or "debit"
+    product_name = extract_product_name(corrected_text)
+    weight_per_unit = safe_float(weight_match.group(1)) if weight_match and unit != "kg" else 0
+    rate_type = detect_rate_type(corrected_text)
+    payment_type = detect_payment_type(corrected_text)
     supplier_name = ""
 
     for name in supplier_names or []:
@@ -446,11 +506,17 @@ def fallback_parse(text, today, supplier_names=None):
     return normalize_ai_payload(
         {
             "supplier_name": supplier_name,
+            "product_name": product_name,
             "transaction_type": transaction_type,
             "quantity": quantity,
             "unit": unit,
+            "weight_per_unit": weight_per_unit,
+            "weight_unit": "kg" if weight_per_unit else "",
+            "total_weight": quantity * weight_per_unit if quantity and weight_per_unit else 0,
             "rate": rate,
+            "rate_type": rate_type,
             "amount": amount,
+            "payment_type": payment_type,
             "date": today,
             "description": text,
         },
@@ -464,6 +530,10 @@ def normalize_ai_payload(payload, original_text, today, corrected_text=None):
     corrected_text = corrected_text or normalize_voice_text(original_text)
     quantity = safe_float(payload.get("quantity"))
     rate = safe_float(payload.get("rate"))
+    weight_per_unit = safe_float(payload.get("weight_per_unit")) or extract_weight_per_unit(corrected_text)
+    total_weight = safe_float(payload.get("total_weight"))
+    if total_weight <= 0 and quantity > 0 and weight_per_unit > 0:
+        total_weight = quantity * weight_per_unit
     amount = safe_float(payload.get("amount"))
     calculated_amount = calculate_amount(quantity, rate, corrected_text)
     if calculated_amount > 0:
@@ -478,17 +548,44 @@ def normalize_ai_payload(payload, original_text, today, corrected_text=None):
 
     supplier_name = str(payload.get("supplier_name", "")).strip()
     supplier_name = correct_supplier_name(supplier_name, corrected_text)
-    description = build_clean_description(payload, original_text, corrected_text)
+    product_name = normalize_product_name(payload.get("product_name")) or extract_product_name(corrected_text)
+    rate_type = str(payload.get("rate_type") or detect_rate_type(corrected_text)).strip() or "unknown"
+    payment_type = str(payload.get("payment_type") or detect_payment_type(corrected_text)).strip() or "unknown"
+    confidence, uncertain_fields = score_parse_confidence(
+        supplier_name=supplier_name,
+        product_name=product_name,
+        quantity=quantity,
+        unit=payload.get("unit"),
+        rate=rate,
+        amount=amount,
+        ai_confidence=safe_float(payload.get("confidence")),
+        ai_uncertain_fields=payload.get("uncertain_fields"),
+    )
+    description = build_clean_description(
+        {**payload, "product_name": product_name, "quantity": quantity, "rate": rate},
+        original_text,
+        corrected_text,
+    )
 
     return {
         "supplier_name": supplier_name,
+        "product_name": product_name,
         "transaction_type": transaction_type,
         "quantity": quantity,
         "unit": str(payload.get("unit", "")).strip(),
+        "weight_per_unit": weight_per_unit,
+        "weight_unit": "kg" if weight_per_unit else str(payload.get("weight_unit", "")).strip(),
+        "total_weight": total_weight,
         "rate": rate,
+        "rate_type": rate_type if rate_type in {"per_kg", "per_unit", "total", "unknown"} else "unknown",
         "amount": amount,
+        "payment_type": payment_type if payment_type in {"cash", "ledger", "unknown"} else "unknown",
         "date": str(payload.get("date") or today)[:10],
         "description": description,
+        "confidence": confidence,
+        "needs_confirmation": confidence < 0.72 or bool(uncertain_fields),
+        "uncertain_fields": uncertain_fields,
+        "normalized_text": corrected_text,
     }
 
 
@@ -497,7 +594,20 @@ def normalize_voice_text(text):
     normalized = split_joined_quantity_units(normalized)
     for wrong, correct in WORD_CORRECTIONS.items():
         normalized = re.sub(rf"\b{wrong}\b", correct, normalized)
+    normalized = " ".join(correct_token(token) for token in normalized.split())
     return " ".join(normalized.split())
+
+
+def correct_token(token):
+    clean = re.sub(r"[^a-z0-9.]", "", token.lower())
+    if not clean or clean.isdigit() or re.fullmatch(r"\d+(?:\.\d+)?", clean):
+        return token
+    if clean in FUZZY_VOCABULARY:
+        return FUZZY_VOCABULARY[clean]
+    if len(clean) < 4:
+        return token
+    match = get_close_matches(clean, FUZZY_VOCABULARY.keys(), n=1, cutoff=0.78)
+    return FUZZY_VOCABULARY[match[0]] if match else token
 
 
 def correct_supplier_name(supplier_name, corrected_text):
@@ -520,8 +630,7 @@ def correct_supplier_name(supplier_name, corrected_text):
 
 def build_clean_description(payload, original_text, corrected_text=None):
     corrected = corrected_text or normalize_voice_text(original_text)
-    tokens = corrected.split()
-    product = next((token for token in tokens if token in PRODUCT_WORDS), "")
+    product = normalize_product_name(payload.get("product_name")) or extract_product_name(corrected)
     quantity = safe_float(payload.get("quantity"))
     unit = str(payload.get("unit", "")).strip()
     rate = safe_float(payload.get("rate"))
@@ -549,6 +658,81 @@ def calculate_amount(quantity, rate, text):
     if is_per_kg_rate(text) and weight > 0:
         return quantity * weight * rate
     return quantity * rate
+
+
+def normalize_product_name(value):
+    value = str(value or "").strip().lower()
+    if not value:
+        return ""
+    if value in PRODUCT_ALIASES:
+        return PRODUCT_ALIASES[value]
+    match = get_close_matches(value, PRODUCT_ALIASES.keys(), n=1, cutoff=0.78)
+    return PRODUCT_ALIASES[match[0]] if match else str(value).title()
+
+
+def extract_product_name(text):
+    tokens = str(text or "").lower().split()
+    for token in tokens:
+        if token in PRODUCT_ALIASES:
+            return PRODUCT_ALIASES[token]
+    for token in tokens:
+        match = get_close_matches(token, PRODUCT_ALIASES.keys(), n=1, cutoff=0.78)
+        if match:
+            return PRODUCT_ALIASES[match[0]]
+    return ""
+
+
+def detect_rate_type(text):
+    if is_per_kg_rate(text):
+        return "per_kg"
+    lower = str(text or "").lower()
+    if re.search(r"\b(?:bhav|rate|ki|ka)\b", lower):
+        return "per_unit"
+    return "unknown"
+
+
+def detect_payment_type(text):
+    lower = str(text or "").lower()
+    if re.search(r"\bcash|rokad|rokda|rupaye\s+(?:diye|diya)\b", lower):
+        return "cash"
+    if re.search(r"\budhar|khata|likho|jama|mila|mili|add\b", lower):
+        return "ledger"
+    return "unknown"
+
+
+def score_parse_confidence(
+    supplier_name,
+    product_name,
+    quantity,
+    unit,
+    rate,
+    amount,
+    ai_confidence=0,
+    ai_uncertain_fields=None,
+):
+    uncertain = set(ai_uncertain_fields if isinstance(ai_uncertain_fields, list) else [])
+    score = ai_confidence if 0 < ai_confidence <= 1 else 0.58
+    if supplier_name:
+        score += 0.08
+    else:
+        uncertain.add("supplier_name")
+    if product_name:
+        score += 0.08
+    if quantity > 0:
+        score += 0.08
+    else:
+        uncertain.add("quantity")
+    if unit:
+        score += 0.06
+    if rate > 0:
+        score += 0.08
+    else:
+        uncertain.add("rate")
+    if amount > 0:
+        score += 0.08
+    else:
+        uncertain.add("amount")
+    return min(score, 0.98), sorted(uncertain)
 
 
 def extract_weight_per_unit(text):
