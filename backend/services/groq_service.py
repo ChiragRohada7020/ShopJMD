@@ -16,6 +16,7 @@ For goods phrases, segregate spoken parts into fields. Example: "bh ka teen kaat
 Common retailer units include goni, daag, katta/kaata, carton/catoon, set, nag, bori, bag, packet, box, kg, kilo.
 Mobile speech may join quantity and unit into one word, such as dogoni = do goni, teenkaata = teen kaata, dokaata = do kaata, donag = do nag. Split these before parsing.
 Understand Hindi/Marathi money words: sau/sao/so means hundred, hazar/hajaar means thousand, and tevis/tavis sao means 2300.
+Use corrected_voice_text to fix common voice spelling mistakes, but keep the user's original meaning.
 If a goods phrase has no clear cash received/paid word, default transaction_type to "debit".
 If amount is missing and quantity/rate exist, amount = quantity * rate.
 If date is missing use the provided current date.
@@ -258,6 +259,32 @@ PRODUCT_WORDS = {
     "chinni",
 }
 
+WORD_CORRECTIONS = {
+    "sygar": "sugar",
+    "suger": "sugar",
+    "shugar": "sugar",
+    "chinni": "chini",
+    "guni": "goni",
+    "gunny": "goni",
+    "dag": "daag",
+    "kaata": "katta",
+    "kaate": "katta",
+    "kate": "katta",
+    "katter": "katta",
+    "cartoon": "carton",
+    "catoon": "carton",
+    "nug": "nag",
+    "bory": "bori",
+    "tavis": "tevis",
+    "sao": "sau",
+    "so": "sau",
+    "hajaar": "hazar",
+    "hazaar": "hazar",
+    "rupya": "rupaye",
+    "rupee": "rupaye",
+    "rupees": "rupaye",
+}
+
 CREDIT_PATTERNS = [
     r"\bcredit\b",
     r"\bjama\b",
@@ -289,6 +316,7 @@ DEBIT_PATTERNS = [
 def parse_voice_with_groq(text, supplier_names=None):
     supplier_names = supplier_names or []
     today = date.today().isoformat()
+    corrected_text = normalize_voice_text(text)
     api_key = current_app.config.get("GROQ_API_KEY", "")
     model = current_app.config.get("GROQ_MODEL", "llama3-70b-8192")
 
@@ -312,8 +340,9 @@ def parse_voice_with_groq(text, supplier_names=None):
                             "instruction": (
                                 "Parse this like a normal Indian retailer speaking quickly. "
                                 "Extract supplier, quantity, unit, kg/weight details, rate, amount, and debit/credit. "
-                                "Use ledger_examples as the strongest guide."
+                                "Use corrected_voice_text for spelling fixes and ledger_examples as the strongest guide."
                             ),
+                            "corrected_voice_text": corrected_text,
                             "voice_text": text,
                         },
                         ensure_ascii=False,
@@ -330,7 +359,8 @@ def parse_voice_with_groq(text, supplier_names=None):
 
 
 def fallback_parse(text, today, supplier_names=None):
-    lower = normalize_amount_words(normalize_spoken_numbers(split_joined_quantity_units(text.lower())))
+    corrected_text = normalize_voice_text(text)
+    lower = normalize_amount_words(normalize_spoken_numbers(split_joined_quantity_units(corrected_text.lower())))
     numbers = [float(match) for match in re.findall(r"\d+(?:\.\d+)?", lower)]
     unit_words = "|".join(UNIT_ALIASES)
     quantity_match = re.search(rf"\b(\d+(?:\.\d+)?)\s+({unit_words})\b", lower)
@@ -400,6 +430,14 @@ def normalize_ai_payload(payload, original_text, today):
         "date": str(payload.get("date") or today)[:10],
         "description": str(payload.get("description") or original_text).strip(),
     }
+
+
+def normalize_voice_text(text):
+    normalized = str(text or "").lower()
+    normalized = split_joined_quantity_units(normalized)
+    for wrong, correct in WORD_CORRECTIONS.items():
+        normalized = re.sub(rf"\b{wrong}\b", correct, normalized)
+    return " ".join(normalized.split())
 
 
 def safe_float(value):
