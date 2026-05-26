@@ -13,6 +13,9 @@ supplier_name, transaction_type, quantity, unit, rate, amount, date, description
 transaction_type must be "credit" or "debit".
 Use the Indian shop ledger meaning from ledger_examples exactly. These examples are more important than English accounting assumptions.
 For goods phrases, segregate spoken parts into fields. Example: "bh ka teen kaate 30 kilo ke 500 rupaye me" means supplier_name "bh", quantity 3, unit "katta (30 kg)", rate 500, amount 1500.
+Common retailer units include goni, daag, katta/kaata, carton/catoon, set, nag, bori, bag, packet, box, kg, kilo.
+Mobile speech may join quantity and unit into one word, such as dogoni = do goni, teenkaata = teen kaata, dokaata = do kaata, donag = do nag. Split these before parsing.
+Understand Hindi/Marathi money words: sau/sao/so means hundred, hazar/hajaar means thousand, and tevis/tavis sao means 2300.
 If a goods phrase has no clear cash received/paid word, default transaction_type to "debit".
 If amount is missing and quantity/rate exist, amount = quantity * rate.
 If date is missing use the provided current date.
@@ -87,6 +90,42 @@ LEDGER_EXAMPLES = [
             "description": "4 bag, 25 kg each, at 700",
         },
     },
+    {
+        "voice_text": "sugar ki do goni",
+        "parsed": {
+            "supplier_name": "",
+            "transaction_type": "debit",
+            "quantity": 2,
+            "unit": "goni",
+            "rate": 0,
+            "amount": 0,
+            "description": "sugar, 2 goni",
+        },
+    },
+    {
+        "voice_text": "sugar ki dogoni 1500 rupaye me",
+        "parsed": {
+            "supplier_name": "",
+            "transaction_type": "debit",
+            "quantity": 2,
+            "unit": "goni",
+            "rate": 1500,
+            "amount": 3000,
+            "description": "sugar, 2 goni, at 1500",
+        },
+    },
+    {
+        "voice_text": "sugar ki dogoni tavis sao rupaye me",
+        "parsed": {
+            "supplier_name": "",
+            "transaction_type": "debit",
+            "quantity": 2,
+            "unit": "goni",
+            "rate": 2300,
+            "amount": 4600,
+            "description": "sugar, 2 goni, at 2300",
+        },
+    },
 ]
 
 SPOKEN_NUMBERS = {
@@ -116,15 +155,90 @@ SPOKEN_NUMBERS = {
     "nine": 9,
     "das": 10,
     "ten": 10,
+    "gyarah": 11,
+    "akra": 11,
+    "eleven": 11,
+    "barah": 12,
+    "bara": 12,
+    "twelve": 12,
+    "terah": 13,
+    "tera": 13,
+    "thirteen": 13,
+    "chaudah": 14,
+    "chauda": 14,
+    "fourteen": 14,
+    "pandrah": 15,
+    "pandra": 15,
+    "fifteen": 15,
+    "solah": 16,
+    "sola": 16,
+    "sixteen": 16,
+    "satrah": 17,
+    "satra": 17,
+    "seventeen": 17,
+    "atharah": 18,
+    "athra": 18,
+    "eighteen": 18,
+    "unnis": 19,
+    "unish": 19,
+    "nineteen": 19,
+    "bees": 20,
+    "bis": 20,
+    "twenty": 20,
+    "ikkis": 21,
+    "ekvis": 21,
+    "twentyone": 21,
+    "bais": 22,
+    "bavis": 22,
+    "twentytwo": 22,
+    "teis": 23,
+    "tevis": 23,
+    "tavis": 23,
+    "twentythree": 23,
+    "chaubis": 24,
+    "chovis": 24,
+    "twentyfour": 24,
+    "pachis": 25,
+    "panchvis": 25,
+    "twentyfive": 25,
+    "chabbis": 26,
+    "savvis": 26,
+    "twentysix": 26,
+    "sattais": 27,
+    "sattavis": 27,
+    "twentyseven": 27,
+    "athais": 28,
+    "athavis": 28,
+    "twentyeight": 28,
+    "untis": 29,
+    "unatis": 29,
+    "twentynine": 29,
+    "tees": 30,
+    "tis": 30,
+    "thirty": 30,
 }
 
 UNIT_ALIASES = {
+    "goni": "goni",
+    "guni": "goni",
+    "gunny": "goni",
+    "daag": "daag",
+    "dag": "daag",
     "katta": "katta",
     "katte": "katta",
     "kattae": "katta",
+    "kaata": "katta",
     "kaate": "katta",
     "kate": "katta",
     "katter": "katta",
+    "carton": "carton",
+    "cartoon": "carton",
+    "catoon": "carton",
+    "set": "set",
+    "nag": "nag",
+    "nug": "nag",
+    "bori": "bori",
+    "bory": "bori",
     "bag": "bag",
     "bags": "bag",
     "kg": "kg",
@@ -134,6 +248,14 @@ UNIT_ALIASES = {
     "pcs": "piece",
     "box": "box",
     "packet": "packet",
+}
+
+PRODUCT_WORDS = {
+    "sugar",
+    "sygar",
+    "suger",
+    "chini",
+    "chinni",
 }
 
 CREDIT_PATTERNS = [
@@ -208,16 +330,16 @@ def parse_voice_with_groq(text, supplier_names=None):
 
 
 def fallback_parse(text, today, supplier_names=None):
-    lower = normalize_spoken_numbers(text.lower())
+    lower = normalize_amount_words(normalize_spoken_numbers(split_joined_quantity_units(text.lower())))
     numbers = [float(match) for match in re.findall(r"\d+(?:\.\d+)?", lower)]
     unit_words = "|".join(UNIT_ALIASES)
     quantity_match = re.search(rf"\b(\d+(?:\.\d+)?)\s+({unit_words})\b", lower)
     rate_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:rupaye|rupees|rs|rate)\b", lower)
     weight_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:kg|kilo)\b", lower)
 
-    quantity = safe_float(quantity_match.group(1)) if quantity_match else (numbers[0] if numbers else 0)
+    quantity = safe_float(quantity_match.group(1)) if quantity_match else 0
     rate = safe_float(rate_match.group(1)) if rate_match else (numbers[-1] if len(numbers) > 1 else 0)
-    amount = quantity * rate if quantity and rate else (numbers[0] if numbers else 0)
+    amount = quantity * rate if quantity and rate else (0 if quantity_match else (numbers[0] if numbers else 0))
     unit_match = quantity_match or re.search(rf"\b({unit_words})\b", lower)
     unit_word = unit_match.group(2) if quantity_match else (unit_match.group(1) if unit_match else "")
     unit = UNIT_ALIASES.get(unit_word, "")
@@ -237,6 +359,8 @@ def fallback_parse(text, today, supplier_names=None):
     if not supplier_name:
         match = re.search(r"\b([\w]+)\s+(ka|ke|ki|account|khate)\b", text, flags=re.IGNORECASE)
         supplier_name = match.group(1) if match else ""
+    if supplier_name.lower() in PRODUCT_WORDS:
+        supplier_name = ""
 
     return normalize_ai_payload(
         {
@@ -288,6 +412,33 @@ def safe_float(value):
 def normalize_spoken_numbers(text):
     for word, number in SPOKEN_NUMBERS.items():
         text = re.sub(rf"\b{word}\b", str(number), text)
+    return text
+
+
+def normalize_amount_words(text):
+    multipliers = {
+        "sau": 100,
+        "sao": 100,
+        "so": 100,
+        "hundred": 100,
+        "hazar": 1000,
+        "hazaar": 1000,
+        "hajaar": 1000,
+        "thousand": 1000,
+    }
+    for word, multiplier in multipliers.items():
+        text = re.sub(
+            rf"\b(\d+(?:\.\d+)?)\s+{word}\b",
+            lambda match: f"{safe_float(match.group(1)) * multiplier:g}",
+            text,
+        )
+    return text
+
+
+def split_joined_quantity_units(text):
+    for number_word in sorted(SPOKEN_NUMBERS, key=len, reverse=True):
+        for unit_word in sorted(UNIT_ALIASES, key=len, reverse=True):
+            text = re.sub(rf"\b{number_word}{unit_word}\b", f"{number_word} {unit_word}", text)
     return text
 
 
