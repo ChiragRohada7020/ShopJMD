@@ -113,6 +113,26 @@ MONGO_URI=mongodb://localhost:27017/shopjmd
 
 For MongoDB Atlas, replace `MONGO_URI` with your Atlas connection string and keep `MONGO_DB_NAME=shopjmd`. The default collections are `shopjmd_suppliers` and `shopjmd_transactions`.
 
+## Deployment
+
+Deploy the frontend on Vercel from the `frontend` directory. The included `frontend/vercel.json` builds the Vite app to `dist` and rewrites frontend routes to `index.html`.
+
+Set this Vercel environment variable:
+
+```env
+VITE_API_URL=https://your-render-api.onrender.com
+```
+
+Deploy the backend on Render using the included `render.yaml`. Render installs `backend/requirements.txt` and starts the API with Gunicorn through `backend/wsgi.py`.
+
+Set these Render environment variables:
+
+```env
+MONGO_URI=your_mongodb_atlas_uri
+FRONTEND_ORIGIN=https://your-vercel-app.vercel.app
+GROQ_API_KEY=your_key
+```
+
 ## Groq API Setup
 
 1. Create a Groq API key from your Groq dashboard.

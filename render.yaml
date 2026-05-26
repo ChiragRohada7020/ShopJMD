@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: shop-supplier-ledger-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: FLASK_DEBUG
+        value: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB_NAME
+        value: shopjmd
+      - key: MONGO_SUPPLIERS_COLLECTION
+        value: shopjmd_suppliers
+      - key: MONGO_TRANSACTIONS_COLLECTION
+        value: shopjmd_transactions
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama3-70b-8192
+      - key: SHOP_NAME
+        value: Shop JMD
