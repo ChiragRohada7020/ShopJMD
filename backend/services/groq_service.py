@@ -17,6 +17,7 @@ Common retailer units include goni, daag, katta/kaata, carton/catoon, set, nag, 
 Mobile speech may join quantity and unit into one word, such as dogoni = do goni, teenkaata = teen kaata, dokaata = do kaata, donag = do nag. Split these before parsing.
 Understand Hindi/Marathi money words: sau/sao/so means hundred, hazar/hajaar means thousand, and tevis/tavis sao means 2300.
 Use corrected_voice_text to fix common voice spelling mistakes, but keep the user's original meaning.
+If text starts with a supplier code/name followed by a product word, such as "bh shakkar ki doguni 1322 mili", supplier_name is "bh" and product is not supplier.
 If a goods phrase has no clear cash received/paid word, default transaction_type to "debit".
 If amount is missing and quantity/rate exist, amount = quantity * rate.
 If date is missing use the provided current date.
@@ -125,6 +126,18 @@ LEDGER_EXAMPLES = [
             "rate": 2300,
             "amount": 4600,
             "description": "sugar, 2 goni, at 2300",
+        },
+    },
+    {
+        "voice_text": "bh shakkar ki doguni 1322 mili",
+        "parsed": {
+            "supplier_name": "bh",
+            "transaction_type": "credit",
+            "quantity": 2,
+            "unit": "goni",
+            "rate": 1322,
+            "amount": 2644,
+            "description": "shakkar, 2 goni, at 1322",
         },
     },
 ]
@@ -253,6 +266,9 @@ UNIT_ALIASES = {
 
 PRODUCT_WORDS = {
     "sugar",
+    "shakkar",
+    "sakkar",
+    "sakhar",
     "sygar",
     "suger",
     "chini",
@@ -263,7 +279,12 @@ WORD_CORRECTIONS = {
     "sygar": "sugar",
     "suger": "sugar",
     "shugar": "sugar",
+    "shakkar": "sugar",
+    "sakkar": "sugar",
+    "sakhar": "sugar",
     "chinni": "chini",
+    "doguni": "do goni",
+    "dogony": "do goni",
     "guni": "goni",
     "gunny": "goni",
     "dag": "daag",
@@ -293,6 +314,7 @@ CREDIT_PATTERNS = [
     r"\breceiv(?:e|ed)\b",
     r"\bpayment\s+(?:mila|aaya|aya|received)\b",
     r"\bpaise\s+(?:aaye|aye|aaya|aya|mile|mila)\b",
+    r"\b(?:mila|mili|mile|milay)\b",
     r"\b(?:khate|account)\s+(?:me|mein)\s+jama\b",
     r"\bse\b.*\b(?:liye|lia|liya|le\s*liye|le\s*liya|mila|mile)\b",
     r"जमा",
@@ -352,7 +374,7 @@ def parse_voice_with_groq(text, supplier_names=None):
             response_format={"type": "json_object"},
         )
         content = response.choices[0].message.content
-        return normalize_ai_payload(json.loads(content), text, today)
+        return normalize_ai_payload(json.loads(content), text, today, corrected_text)
     except Exception as error:
         current_app.logger.warning("Groq voice parsing failed, using fallback parser: %s", error)
         return fallback_parse(text, today, supplier_names)
@@ -405,10 +427,11 @@ def fallback_parse(text, today, supplier_names=None):
         },
         text,
         today,
+        corrected_text,
     )
 
 
-def normalize_ai_payload(payload, original_text, today):
+def normalize_ai_payload(payload, original_text, today, corrected_text=None):
     quantity = safe_float(payload.get("quantity"))
     rate = safe_float(payload.get("rate"))
     amount = safe_float(payload.get("amount"))
@@ -420,8 +443,11 @@ def normalize_ai_payload(payload, original_text, today):
         transaction_type = "debit"
     transaction_type = detect_transaction_type(original_text) or transaction_type
 
+    supplier_name = str(payload.get("supplier_name", "")).strip()
+    supplier_name = correct_supplier_name(supplier_name, corrected_text or normalize_voice_text(original_text))
+
     return {
-        "supplier_name": str(payload.get("supplier_name", "")).strip(),
+        "supplier_name": supplier_name,
         "transaction_type": transaction_type,
         "quantity": quantity,
         "unit": str(payload.get("unit", "")).strip(),
@@ -438,6 +464,24 @@ def normalize_voice_text(text):
     for wrong, correct in WORD_CORRECTIONS.items():
         normalized = re.sub(rf"\b{wrong}\b", correct, normalized)
     return " ".join(normalized.split())
+
+
+def correct_supplier_name(supplier_name, corrected_text):
+    supplier = str(supplier_name or "").strip()
+    tokens = str(corrected_text or "").split()
+    if not tokens:
+        return supplier
+
+    product_indexes = [index for index, token in enumerate(tokens) if token in PRODUCT_WORDS]
+    if not product_indexes:
+        return "" if supplier.lower() in PRODUCT_WORDS else supplier
+
+    first_product_index = product_indexes[0]
+    if supplier.lower() in PRODUCT_WORDS and first_product_index > 0:
+        return tokens[0]
+    if not supplier and first_product_index > 0:
+        return tokens[0]
+    return "" if supplier.lower() in PRODUCT_WORDS else supplier
 
 
 def safe_float(value):
