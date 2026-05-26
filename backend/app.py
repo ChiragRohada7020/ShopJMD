@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
@@ -26,6 +26,19 @@ def create_app():
         },
     )
     init_mongo(app)
+
+    @app.after_request
+    def add_cors_headers(response):
+        if request.path.startswith("/api/"):
+            origin = request.headers.get("Origin")
+            response.headers["Access-Control-Allow-Origin"] = origin or app.config["FRONTEND_ORIGIN"]
+            response.headers["Vary"] = "Origin"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = request.headers.get(
+                "Access-Control-Request-Headers",
+                "Content-Type, Authorization",
+            )
+        return response
 
     app.register_blueprint(dashboard_bp, url_prefix="/api")
     app.register_blueprint(suppliers_bp, url_prefix="/api/suppliers")
