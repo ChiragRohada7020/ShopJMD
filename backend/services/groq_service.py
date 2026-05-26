@@ -445,6 +445,7 @@ def normalize_ai_payload(payload, original_text, today, corrected_text=None):
 
     supplier_name = str(payload.get("supplier_name", "")).strip()
     supplier_name = correct_supplier_name(supplier_name, corrected_text or normalize_voice_text(original_text))
+    description = build_clean_description(payload, original_text, corrected_text)
 
     return {
         "supplier_name": supplier_name,
@@ -454,7 +455,7 @@ def normalize_ai_payload(payload, original_text, today, corrected_text=None):
         "rate": rate,
         "amount": amount,
         "date": str(payload.get("date") or today)[:10],
-        "description": str(payload.get("description") or original_text).strip(),
+        "description": description,
     }
 
 
@@ -482,6 +483,29 @@ def correct_supplier_name(supplier_name, corrected_text):
     if not supplier and first_product_index > 0:
         return tokens[0]
     return "" if supplier.lower() in PRODUCT_WORDS else supplier
+
+
+def build_clean_description(payload, original_text, corrected_text=None):
+    corrected = corrected_text or normalize_voice_text(original_text)
+    tokens = corrected.split()
+    product = next((token for token in tokens if token in PRODUCT_WORDS), "")
+    quantity = safe_float(payload.get("quantity"))
+    unit = str(payload.get("unit", "")).strip()
+    rate = safe_float(payload.get("rate"))
+
+    parts = []
+    if product:
+        parts.append(product)
+    if quantity > 0 and unit:
+        parts.append(f"{quantity:g} {unit}")
+    elif unit:
+        parts.append(unit)
+    if rate > 0:
+        parts.append(f"at {rate:g}")
+
+    if parts:
+        return ", ".join(parts)
+    return str(payload.get("description") or corrected or original_text).strip()
 
 
 def safe_float(value):
