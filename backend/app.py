@@ -15,7 +15,16 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    CORS(app, resources={r"/api/*": {"origins": app.config["FRONTEND_ORIGIN"]}})
+    CORS(
+        app,
+        resources={
+            r"/api/*": {
+                "origins": app.config["FRONTEND_ORIGIN"],
+                "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                "allow_headers": ["Content-Type", "Authorization"],
+            }
+        },
+    )
     init_mongo(app)
 
     app.register_blueprint(dashboard_bp, url_prefix="/api")
