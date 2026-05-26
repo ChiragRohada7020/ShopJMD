@@ -7,18 +7,49 @@ from groq import Groq
 
 
 SYSTEM_PROMPT = """
-You parse Hindi, Hinglish, and Indian shop ledger voice text into strict JSON.
+You parse Hindi, Hinglish, and Indian shop ledger voice text into strict JSON for a supplier ledger app.
 Return only valid JSON with keys:
 supplier_name, transaction_type, quantity, unit, rate, amount, date, description.
 transaction_type must be "credit" or "debit".
-Use Indian shop ledger meaning:
-- "jama", "jama karo", "khate me jama", "account me jama", "paise aaye", "payment mila", "received", "se liye" mean credit.
-- "rokad diye", "rok diye", "cash diye", "paise diye", "payment diya", "ko diye", "udhaar diya" mean debit.
+Use the Indian shop ledger meaning from ledger_examples exactly. These examples are more important than English accounting assumptions.
 If amount is missing and quantity/rate exist, amount = quantity * rate.
 If date is missing use the provided current date.
 Do not invent a supplier name if none is spoken.
 If a spoken supplier name sounds close to one of the known suppliers, choose the closest known supplier name.
 """
+
+LEDGER_EXAMPLES = [
+    {
+        "voice_text": "ramesh ke khate me 2000 jama karo",
+        "transaction_type": "credit",
+        "meaning": "Money is added/received into Ramesh account.",
+    },
+    {
+        "voice_text": "ramesh account me 2000 jama",
+        "transaction_type": "credit",
+        "meaning": "Deposit/payment received in Ramesh account.",
+    },
+    {
+        "voice_text": "ramesh se 2000 liye",
+        "transaction_type": "credit",
+        "meaning": "Money received from Ramesh.",
+    },
+    {
+        "voice_text": "ramesh ko 2000 diye",
+        "transaction_type": "debit",
+        "meaning": "Money paid/given to Ramesh.",
+    },
+    {
+        "voice_text": "ramesh ko rokad diye 2000",
+        "transaction_type": "debit",
+        "meaning": "Cash paid/given to Ramesh.",
+    },
+    {
+        "voice_text": "ramesh ko rok diye 2000",
+        "transaction_type": "debit",
+        "meaning": "Mobile speech may hear rokad as rok; treat as cash given.",
+    },
+]
 
 CREDIT_PATTERNS = [
     r"\bcredit\b",
@@ -70,6 +101,8 @@ def parse_voice_with_groq(text, supplier_names=None):
                         {
                             "current_date": today,
                             "known_suppliers": supplier_names,
+                            "ledger_examples": LEDGER_EXAMPLES,
+                            "instruction": "Classify transaction_type using ledger_examples before choosing credit or debit.",
                             "voice_text": text,
                         },
                         ensure_ascii=False,
