@@ -7,6 +7,22 @@ import { formatCurrency, getErrorMessage } from "../utils.js";
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
+const compactRepeatedWords = (text) =>
+  text
+    .split(/\s+/)
+    .filter((word, index, words) => index === 0 || word.toLowerCase() !== words[index - 1].toLowerCase())
+    .join(" ")
+    .trim();
+
+const appendUniqueText = (baseText, nextText) => {
+  const base = baseText.trim();
+  const next = compactRepeatedWords(nextText);
+  if (!next) return base;
+  if (!base) return next;
+  if (base.toLowerCase().endsWith(next.toLowerCase())) return base;
+  return compactRepeatedWords(`${base} ${next}`);
+};
+
 export default function VoiceEntry() {
   const [voiceText, setVoiceText] = useState("");
   const [listening, setListening] = useState(false);
@@ -18,6 +34,7 @@ export default function VoiceEntry() {
   const [liveText, setLiveText] = useState("");
   const recognitionRef = useRef(null);
   const silenceTimerRef = useRef(null);
+  const finalTranscriptRef = useRef("");
 
   useEffect(() => {
     api.get("/api/suppliers").then((response) => setSuppliers(response.data.suppliers)).catch(() => {});
@@ -30,41 +47,43 @@ export default function VoiceEntry() {
     }
     window.clearTimeout(silenceTimerRef.current);
     setLiveText("");
+    finalTranscriptRef.current = "";
     setParsed(null);
 
     const instance = new SpeechRecognition();
     instance.lang = voiceLang;
     instance.interimResults = true;
-    instance.continuous = true;
-    instance.maxAlternatives = 5;
+    instance.continuous = false;
+    instance.maxAlternatives = 1;
 
     instance.onresult = (event) => {
-      let finalText = "";
+      let newFinalText = "";
       let interimText = "";
 
-      for (let index = 0; index < event.results.length; index += 1) {
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
-        const bestAlternative = Array.from(result).sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
-        const transcript = bestAlternative?.transcript?.trim() || "";
+        const transcript = compactRepeatedWords(result[0]?.transcript || "");
         if (!transcript) continue;
 
         if (result.isFinal) {
-          finalText = `${finalText} ${transcript}`.trim();
+          newFinalText = appendUniqueText(newFinalText, transcript);
         } else {
-          interimText = `${interimText} ${transcript}`.trim();
+          interimText = appendUniqueText(interimText, transcript);
         }
       }
 
-      const nextText = finalText || interimText;
-      if (nextText) {
-        setVoiceText(nextText);
+      if (newFinalText) {
+        finalTranscriptRef.current = appendUniqueText(finalTranscriptRef.current, newFinalText);
       }
+
+      const nextText = [finalTranscriptRef.current, interimText].filter(Boolean).join(" ").trim();
+      setVoiceText(nextText);
       setLiveText(interimText);
 
-      if (finalText) {
+      if (newFinalText) {
         window.clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = window.setTimeout(() => {
-          parseText(finalText);
+          parseText(finalTranscriptRef.current);
         }, 1200);
       }
     };
