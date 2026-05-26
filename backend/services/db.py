@@ -33,12 +33,14 @@ def get_db():
 
 
 def suppliers_collection(db=None):
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     return db[current_app.config["MONGO_SUPPLIERS_COLLECTION"]]
 
 
 def transactions_collection(db=None):
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     return db[current_app.config["MONGO_TRANSACTIONS_COLLECTION"]]
 
 
