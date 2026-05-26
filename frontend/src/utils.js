@@ -14,7 +14,8 @@ export const today = () => new Date().toISOString().slice(0, 10);
 
 export const getErrorMessage = (error) => {
   if (error?.message === "Network Error") {
-    return "Backend not reachable. Start Flask on http://localhost:5000 and check VITE_API_URL.";
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:5000";
+    return `Backend not reachable at ${apiUrl}. Check backend deploy, CORS, and VITE_API_URL.`;
   }
   if (error?.code === "ECONNABORTED") {
     return "Request timed out. Check that Flask and MongoDB are running.";
