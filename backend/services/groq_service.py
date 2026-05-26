@@ -12,6 +12,8 @@ Return only valid JSON with keys:
 supplier_name, transaction_type, quantity, unit, rate, amount, date, description.
 transaction_type must be "credit" or "debit".
 Use the Indian shop ledger meaning from ledger_examples exactly. These examples are more important than English accounting assumptions.
+For goods phrases, segregate spoken parts into fields. Example: "bh ka teen kaate 30 kilo ke 500 rupaye me" means supplier_name "bh", quantity 3, unit "katta (30 kg)", rate 500, amount 1500.
+If a goods phrase has no clear cash received/paid word, default transaction_type to "debit".
 If amount is missing and quantity/rate exist, amount = quantity * rate.
 If date is missing use the provided current date.
 Do not invent a supplier name if none is spoken.
@@ -49,7 +51,90 @@ LEDGER_EXAMPLES = [
         "transaction_type": "debit",
         "meaning": "Mobile speech may hear rokad as rok; treat as cash given.",
     },
+    {
+        "voice_text": "bh ka teen kaate 30 kilo ke 500 rupaye me",
+        "parsed": {
+            "supplier_name": "bh",
+            "transaction_type": "debit",
+            "quantity": 3,
+            "unit": "katta (30 kg)",
+            "rate": 500,
+            "amount": 1500,
+            "description": "3 katta, 30 kg each, at 500",
+        },
+    },
+    {
+        "voice_text": "ramesh ke 2 katta 50 kilo ke 900 rupaye rate par",
+        "parsed": {
+            "supplier_name": "ramesh",
+            "transaction_type": "debit",
+            "quantity": 2,
+            "unit": "katta (50 kg)",
+            "rate": 900,
+            "amount": 1800,
+            "description": "2 katta, 50 kg each, at 900",
+        },
+    },
+    {
+        "voice_text": "shyam se 4 bag 25 kg ke 700 me liye",
+        "parsed": {
+            "supplier_name": "shyam",
+            "transaction_type": "credit",
+            "quantity": 4,
+            "unit": "bag (25 kg)",
+            "rate": 700,
+            "amount": 2800,
+            "description": "4 bag, 25 kg each, at 700",
+        },
+    },
 ]
+
+SPOKEN_NUMBERS = {
+    "zero": 0,
+    "ek": 1,
+    "aek": 1,
+    "one": 1,
+    "do": 2,
+    "two": 2,
+    "teen": 3,
+    "tin": 3,
+    "three": 3,
+    "char": 4,
+    "chaar": 4,
+    "four": 4,
+    "panch": 5,
+    "paanch": 5,
+    "five": 5,
+    "che": 6,
+    "chhe": 6,
+    "six": 6,
+    "saat": 7,
+    "seven": 7,
+    "aath": 8,
+    "eight": 8,
+    "nau": 9,
+    "nine": 9,
+    "das": 10,
+    "ten": 10,
+}
+
+UNIT_ALIASES = {
+    "katta": "katta",
+    "katte": "katta",
+    "kattae": "katta",
+    "kaate": "katta",
+    "kate": "katta",
+    "katter": "katta",
+    "bag": "bag",
+    "bags": "bag",
+    "kg": "kg",
+    "kilo": "kg",
+    "quintal": "quintal",
+    "piece": "piece",
+    "pcs": "piece",
+    "box": "box",
+    "packet": "packet",
+}
 
 CREDIT_PATTERNS = [
     r"\bcredit\b",
@@ -102,7 +187,11 @@ def parse_voice_with_groq(text, supplier_names=None):
                             "current_date": today,
                             "known_suppliers": supplier_names,
                             "ledger_examples": LEDGER_EXAMPLES,
-                            "instruction": "Classify transaction_type using ledger_examples before choosing credit or debit.",
+                            "instruction": (
+                                "Parse this like a normal Indian retailer speaking quickly. "
+                                "Extract supplier, quantity, unit, kg/weight details, rate, amount, and debit/credit. "
+                                "Use ledger_examples as the strongest guide."
+                            ),
                             "voice_text": text,
                         },
                         ensure_ascii=False,
@@ -119,13 +208,21 @@ def parse_voice_with_groq(text, supplier_names=None):
 
 
 def fallback_parse(text, today, supplier_names=None):
-    lower = text.lower()
+    lower = normalize_spoken_numbers(text.lower())
     numbers = [float(match) for match in re.findall(r"\d+(?:\.\d+)?", lower)]
-    quantity = numbers[0] if numbers else 0
-    rate = numbers[1] if len(numbers) > 1 else 0
+    unit_words = "|".join(UNIT_ALIASES)
+    quantity_match = re.search(rf"\b(\d+(?:\.\d+)?)\s+({unit_words})\b", lower)
+    rate_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:rupaye|rupees|rs|rate)\b", lower)
+    weight_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:kg|kilo)\b", lower)
+
+    quantity = safe_float(quantity_match.group(1)) if quantity_match else (numbers[0] if numbers else 0)
+    rate = safe_float(rate_match.group(1)) if rate_match else (numbers[-1] if len(numbers) > 1 else 0)
     amount = quantity * rate if quantity and rate else (numbers[0] if numbers else 0)
-    unit_match = re.search(r"\b(katta|katter|bag|bags|kg|kilo|quintal|piece|pcs|box|packet)\b", lower)
-    unit = unit_match.group(1) if unit_match else ""
+    unit_match = quantity_match or re.search(rf"\b({unit_words})\b", lower)
+    unit_word = unit_match.group(2) if quantity_match else (unit_match.group(1) if unit_match else "")
+    unit = UNIT_ALIASES.get(unit_word, "")
+    if unit and weight_match and unit != "kg":
+        unit = f"{unit} ({safe_float(weight_match.group(1)):g} kg)"
     transaction_type = detect_transaction_type(text) or "debit"
     supplier_name = ""
 
@@ -136,6 +233,9 @@ def fallback_parse(text, today, supplier_names=None):
 
     if not supplier_name:
         match = re.search(r"\b([\w]+)\s+(supplier|ko|se|को|से)\b", text, flags=re.IGNORECASE)
+        supplier_name = match.group(1) if match else ""
+    if not supplier_name:
+        match = re.search(r"\b([\w]+)\s+(ka|ke|ki|account|khate)\b", text, flags=re.IGNORECASE)
         supplier_name = match.group(1) if match else ""
 
     return normalize_ai_payload(
@@ -183,6 +283,12 @@ def safe_float(value):
         return float(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def normalize_spoken_numbers(text):
+    for word, number in SPOKEN_NUMBERS.items():
+        text = re.sub(rf"\b{word}\b", str(number), text)
+    return text
 
 
 def detect_transaction_type(text):
